@@ -41,8 +41,12 @@ flowchart LR
    said, and an "approval" must come from someone on the client's side. Anything that fails is flagged.
 4. **A person reviews.** Nothing reaches the record without being accepted. Flagged findings can't be bulk-accepted.
 5. **The brief updates itself.** "Launch date: **27 October** (changed from 20 October on 26 Sep)."
-6. **Use the record:** draft a recap email the client confirms in writing, catch requests outside the
-   signed scope before doing free work, ask questions across months of calls, or export a dispute pack.
+6. **The client confirms.** The recap email carries a link where the client marks each agreement
+   "That's right" or "Not quite", no account needed. Disputes show up on the brief straight away.
+7. **Extra work gets priced and approved.** An out-of-scope request becomes a change order built from
+   the agency's rate card (with GST), which the client approves or declines from a link.
+8. **Phone calls count too.** Upload a call recording or voice note; it's transcribed with speakers
+   labelled, the audio is deleted, and you name the speakers before the AI reads it.
 
 ## Product decisions worth noting
 
@@ -75,14 +79,17 @@ The production backend: Python (FastAPI) + PostgreSQL, designed for Google Cloud
 | AI pipeline | Claude via the Anthropic API, structured output, long calls read in parts, failures recorded |
 | Review and brief | Accept, edit (AI's original kept), discard, add what the AI missed, merge topics |
 | Evidence protection | Database triggers, hash-chained audit log, limited database role, erasure that keeps the log valid |
-| Quality and cost | Discard/edit/miss rates per client; monthly AI budget per agency |
-| Tests | 28 automated tests against a real PostgreSQL, run on every push (badge above) |
+| Client confirmation | One-time links (only a hash is stored), snapshot of what the client saw, per-item confirm or dispute |
+| Change orders | Rate card, quantities, tax, Indian number formatting, client approval link, terms frozen once sent |
+| Audio | Upload recordings, transcription with speaker labels (AssemblyAI), audio deleted afterwards, speaker naming |
+| Quality and cost | Discard/edit/miss rates per client; monthly AI budget per agency; extra work billed per client |
+| Tests | 38 automated tests against a real PostgreSQL, run on every push (badge above) |
 
 ## Status
 
-A working prototype (the live demo) and a tested backend. Not yet deployed or used with real clients.
-Next: run the accuracy suite with real model calls, connect the web app to this backend, add audio
-upload with transcription for phone calls, and pilot it on my own agency's client calls.
+A product concept with a working prototype (the live demo) and a tested backend. Not yet deployed or used
+with real clients. Next: run the accuracy suite with real model calls, connect the web app to this backend,
+add WhatsApp and email as sources, and pilot it on my own agency's client calls.
 
 ## How it was built
 
@@ -109,7 +116,8 @@ Open http://localhost:8000/docs for interactive API docs. In local mode, authent
 clicking **Authorize** and entering `dev:you@yourdomain.com` (any email).
 
 Without an API key everything works except reading calls, Ask and recaps, which return
-a clear configuration error.
+a clear configuration error. Audio upload needs `TRANSCRIPTION_PROVIDER=assemblyai` and an AssemblyAI key.
+Client links point at `PUBLIC_BASE_URL`, so on your computer they open at http://localhost:8000.
 
 ## Run the tests
 
@@ -122,9 +130,11 @@ createdb onrecord_test   # or: docker compose exec db createdb -U onrecord onrec
 DATABASE_URL=postgresql+psycopg://onrecord:onrecord@localhost:5432/onrecord_test pytest -q
 ```
 
-28 tests: transcript parsing, evidence checks, the full API flow, isolation between
-agencies, roles, audit-log tamper detection, erasure, budgets, failure handling, the real
-Anthropic client (network mocked), and the eval grader itself.
+38 tests: transcript parsing, evidence checks, the full API flow, isolation between
+agencies, roles, audit-log tamper detection, erasure, budgets, failure handling, client
+confirmation pages (including HTML escaping and expired links), change-order totals and
+freezing, audio upload and speaker naming, the real Anthropic and AssemblyAI clients
+(network mocked), and the eval grader itself.
 
 ## Measure AI accuracy (do this before trusting it, and before changing model or prompt)
 
@@ -146,6 +156,10 @@ block changes that make extraction worse. Add your own anonymized real calls to
 | `app/jobs.py` | Background runs that save extraction results |
 | `app/services.py` | Review, brief, ask, recap, quality, export, erasure |
 | `app/audit.py` | Append-only hash-chained activity log |
+| `app/confirmations.py` | Client confirmation links and responses |
+| `app/change_orders.py` | Rate card, change orders, totals and approvals |
+| `app/transcription.py` | Audio upload, AssemblyAI transcription, cleanup |
+| `app/routers/public.py` | Pages the client opens from a link (no sign-in, no scripts) |
 | `app/llm.py` | Anthropic client: pinned model, structured output, retries, budget |
 | `app/auth.py` | Sign-in and organization access |
 | `migrations/` | Database schema, including the protection triggers |
@@ -156,7 +170,8 @@ block changes that make extraction worse. Add your own anonymized real calls to
 ## Not done yet
 
 - The Onrecord web screens still use the prototype's storage; they need connecting to this API.
-- Audio upload and transcription (phone calls, voice notes, Hinglish).
+- WhatsApp chat import and email forwarding as sources.
+- Sending emails from the app (today you copy the recap and links into your own email).
 - Email delivery of invitations (today an invite is accepted by signing in with that email).
 - Privacy policy and terms (need a lawyer's review).
 - Real accuracy numbers: run the eval with your API key.

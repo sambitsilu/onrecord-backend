@@ -22,6 +22,21 @@
 - For stronger guarantees later: periodically copy the latest chain hash somewhere outside your
   control (e.g. emailed to the agency, or a write-once storage bucket with retention lock).
 
+## Links sent to clients
+- Confirmation and change-order links carry a random 256-bit token; only its SHA-256 hash is stored.
+  Links expire (14 days by default), a new confirmation link revokes the previous one, and each can be
+  answered once. The link is shown to the agency only when created.
+- What the client saw is stored as a snapshot alongside their answer, so later edits can't change it.
+- Client pages are server-rendered with every value HTML-escaped, no scripts, a strict Content-Security-Policy,
+  `noindex`, and no framing. Anyone holding a link can answer it, so share links only with the client.
+- Once a change order is sent, its terms and lines are frozen by database triggers; a decision is final.
+
+## Audio
+- Uploads are streamed to a private temporary directory with a size limit, fingerprinted (SHA-256),
+  sent to the transcription provider, and deleted when the job ends, whether it succeeded or failed.
+  The provider's copy of the transcript is deleted too. Only the text transcript is kept.
+- Recording consent is required at upload. Speaker names are stored separately, never by editing the transcript.
+
 ## AI safety
 - Transcripts, scope documents and records are passed to the model inside tags, with an instruction
   to treat them as data. The eval includes a hidden-instruction case.
@@ -49,4 +64,5 @@
 - No rate limiting per user yet (put Cloud Armor or an API gateway in front, or add middleware).
 - Background runs use in-process tasks. If an instance is shut down mid-run, the run is marked failed
   on next start and can be rerun. For heavy use, move to Cloud Tasks.
-- No email sending for invitations yet.
+- No email sending yet (invitations, recaps and links are copied by the agency).
+- No rate limiting on the public link pages yet; tokens are unguessable, but add Cloud Armor rate rules before launch.

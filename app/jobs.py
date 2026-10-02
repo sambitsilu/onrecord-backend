@@ -26,9 +26,11 @@ from .transcripts import Line
 log = logging.getLogger("onrecord.jobs")
 
 
-def load_lines(db: Session, call_id: uuid.UUID) -> list[Line]:
-    rows = db.execute(select(TranscriptLine).where(TranscriptLine.call_id == call_id).order_by(TranscriptLine.idx)).scalars()
-    return [Line(t=r.t, speaker=r.speaker, text=r.text) for r in rows]
+def load_lines(db: Session, call_id: uuid.UUID, raw: bool = False) -> list[Line]:
+    """Transcript lines, with speaker labels mapped to names (e.g. "Speaker A" -> "Meera") unless raw."""
+    rows = db.execute(select(TranscriptLine).where(TranscriptLine.call_id == call_id).order_by(TranscriptLine.idx)).scalars().all()
+    names = {} if raw else ((db.execute(select(Call.speaker_map).where(Call.id == call_id)).scalar_one_or_none()) or {})
+    return [Line(t=r.t, speaker=names.get(r.speaker, r.speaker), text=r.text) for r in rows]
 
 
 def fail_stale_runs(db: Session) -> int:

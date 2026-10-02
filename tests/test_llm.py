@@ -78,3 +78,50 @@ def test_bad_key_is_reported_as_configuration_problem(monkeypatch):
     with pytest.raises(LLMError) as e:
         llm.complete("s", "u", 10)
     assert e.value.code == "misconfigured"
+
+
+def test_assemblyai_transcriber_maps_utterances_and_deletes(tmp_path):
+    """The real AssemblyAI client, with HTTP replaced: upload, request, poll, map speakers, delete."""
+    from app.transcription import AssemblyAITranscriber
+
+    calls = []
+
+    class Resp:
+        def __init__(self, data, code=200):
+            self._d, self.status_code = data, code
+
+        def json(self):
+            return self._d
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.status_code)
+
+    polls = iter([{"status": "processing"}, {"status": "completed", "audio_duration": 61.4, "utterances": [
+        {"speaker": "A", "start": 1500, "text": "Green wala design final karo."},
+        {"speaker": "B", "start": 65000, "text": "Theek hai."}]}])
+
+    class FakeRequests:
+        def post(self, url, **kw):
+            calls.append(("POST", url, kw.get("json")))
+            return Resp({"upload_url": "https://cdn/x"} if url.endswith("/upload") else {"id": "t1"})
+
+        def get(self, url, **kw):
+            calls.append(("GET", url, None))
+            return Resp(next(polls))
+
+        def delete(self, url, **kw):
+            calls.append(("DELETE", url, None))
+            return Resp({})
+
+    t = AssemblyAITranscriber(api_key="k", poll_seconds=0)
+    t._rq = FakeRequests()
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(b"x")
+    lines, dur = t.transcribe(str(audio))
+    assert [(ln.t, ln.speaker, ln.text) for ln in lines] == [
+        ("00:00:01", "Speaker A", "Green wala design final karo."), ("00:01:05", "Speaker B", "Theek hai.")]
+    assert dur == 61
+    req = [c for c in calls if c[1].endswith("/transcript")][0][2]
+    assert req["speaker_labels"] is True and req["language_detection"] is True
+    assert calls[-1][0] == "DELETE"  # transcript removed from the provider

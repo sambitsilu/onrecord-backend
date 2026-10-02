@@ -15,7 +15,7 @@ from app.db import init_engine  # noqa: E402
 from app.llm import Usage  # noqa: E402
 
 URL = os.environ["DATABASE_URL"]
-TABLES = "audit_events, llm_usage, records, extraction_runs, transcript_lines, calls, clients, memberships, organizations, users"
+TABLES = "transcription_jobs, change_order_lines, change_orders, rate_items, confirmation_items, confirmation_requests, audit_events, llm_usage, records, extraction_runs, transcript_lines, calls, clients, memberships, organizations, users"
 
 
 class FakeLLM:

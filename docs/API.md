@@ -46,3 +46,32 @@ Errors look like `{"error": {"code": "...", "message": "..."}}`. Full interactiv
 | GET | `/orgs/{org}/clients/{id}/quality` | Discard rate, edit rate, misses, flags |
 | GET | `/orgs/{org}/clients/{id}/audit` | Activity log for the client |
 | GET | `/orgs/{org}/clients/{id}/export` | Full record as Markdown (dispute pack) |
+
+## Client confirmation
+| Method | Path | |
+|---|---|---|
+| POST | `/orgs/{org}/calls/{id}/confirmation` | Create a confirmation link for the call's accepted agreements (shown once) |
+| GET | `/orgs/{org}/clients/{id}/confirmations` | Links and their status |
+| POST | `/orgs/{org}/calls/{id}/recap` | With `include_confirmation_link` (default on), the email ends with the link |
+| GET / POST | `/confirm/{token}` | The page the client opens (HTML form, no sign-in) |
+| GET / POST | `/v1/public/confirmations/{token}` | The same as JSON, for a future web app |
+
+## Change orders
+| Method | Path | |
+|---|---|---|
+| PUT | `/orgs/{org}/billing` | Currency and default tax (owner) |
+| GET / POST / PUT | `/orgs/{org}/rate-items` | Rate card; prices in the smallest unit, e.g. paise (owner to change) |
+| GET / POST | `/orgs/{org}/clients/{id}/change-orders` | List / draft (lines can link the out-of-scope record) |
+| GET / PATCH | `/orgs/{org}/change-orders/{id}` | Read / edit while draft |
+| POST | `/orgs/{org}/change-orders/{id}/send` | Freeze terms and create the approval link (shown once) |
+| POST | `/orgs/{org}/change-orders/{id}/withdraw` | Withdraw a draft or sent order |
+| GET | `/orgs/{org}/clients/{id}/scope-value` | Extra work approved and pending |
+| GET / POST | `/change-order/{token}` | The page the client approves or declines on |
+| GET / POST | `/v1/public/change-orders/{token}` | The same as JSON |
+
+## Audio
+| Method | Path | |
+|---|---|---|
+| POST | `/orgs/{org}/clients/{id}/audio` | Multipart upload: `file`, `title`, `call_date`, `consent`, optional `language`, `extract` |
+| GET | `/orgs/{org}/transcriptions/{id}` | Job status; `call_id` once done |
+| PUT | `/orgs/{org}/calls/{id}/speakers` | Name speakers, e.g. `{"speakers": {"Speaker A": "Meera"}}` |

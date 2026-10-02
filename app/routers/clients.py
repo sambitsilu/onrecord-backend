@@ -104,8 +104,7 @@ def read_call(call_id: uuid.UUID, access: OrgAccess = Depends(org_access), db: S
 @router.get("/calls/{call_id}/lines", response_model=list[LineOut])
 def read_lines(call_id: uuid.UUID, access: OrgAccess = Depends(org_access), db: Session = Depends(get_db)):
     services.get_call(db, access, call_id)
-    rows = db.execute(select(TranscriptLine).where(TranscriptLine.call_id == call_id).order_by(TranscriptLine.idx)).scalars()
-    return [LineOut(idx=r.idx, t=r.t, speaker=r.speaker, text=r.text) for r in rows]
+    return [LineOut(idx=i, t=ln.t, speaker=ln.speaker, text=ln.text) for i, ln in enumerate(jobs.load_lines(db, call_id))]
 
 
 @router.post("/calls/{call_id}/extract", response_model=RunOut, status_code=202)
@@ -136,8 +135,17 @@ def delete_call(call_id: uuid.UUID, access: OrgAccess = Depends(org_access), db:
 def recap(call_id: uuid.UUID, body: RecapIn, request: Request, access: OrgAccess = Depends(org_access), db: Session = Depends(get_db)):
     call = services.get_call(db, access, call_id)
     client = get_client(db, access, call.client_id)
+    link = None
+    if body.include_confirmation_link:
+        from .. import confirmations
+        has_items = db.execute(select(Record.id).where(Record.call_id == call.id, Record.reviewed.is_(True),
+                                                       Record.status == "current",
+                                                       Record.type.in_(confirmations.CONFIRMABLE))).first()
+        if has_items:
+            _, token, _ = confirmations.create_request(db, access, call)
+            link = confirmations.link("confirm", token)
     try:
-        return services.recap(db, access, call, client, body.signer, body.agency, request.app.state.llm_factory())
+        return services.recap(db, access, call, client, body.signer, body.agency, request.app.state.llm_factory(), link)
     except LLMError as e:
         raise llm_http(e) from e
 

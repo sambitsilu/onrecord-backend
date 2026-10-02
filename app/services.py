@@ -36,7 +36,7 @@ def record_out(r: Record) -> dict:
         "id", "client_id", "call_id", "source", "type", "topic", "value", "text", "who", "owner", "due_text",
         "due_date", "line_idx", "t", "quote", "verified", "numbers_ok", "role_ok", "confidence", "outside_scope",
         "scope_note", "status", "replaced_by", "replaces", "reviewed", "reviewed_at", "done", "original",
-        "edited_at", "created_at")}
+        "edited_at", "created_at", "client_confirmation", "client_comment", "client_responded_at")}
     d["replaces"] = d["replaces"] or []
     d["check_reasons"] = reasons_for(r)
     d["needs_check"] = bool(d["check_reasons"])
@@ -62,6 +62,24 @@ def get_call(db: Session, access: OrgAccess, call_id: uuid.UUID) -> Call:
 
 # --- calls ---------------------------------------------------------------------------
 
+def insert_call(db: Session, *, org_id, client: Client, user_id, title: str, call_date: date, lines: list[Line],
+                source: str = "transcript", note_extra: str = "") -> Call:
+    """Store a call and its transcript (immutable from here on) and log it. Commits."""
+    fingerprint = hashlib.sha256(json.dumps([ln.as_dict() for ln in lines], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    call = Call(org_id=org_id, client_id=client.id, title=title.strip(), call_date=call_date, consent=True,
+                sha256=fingerprint, line_count=len(lines), status="new", source=source, speaker_map={}, created_by=user_id)
+    db.add(call)
+    db.flush()
+    db.add_all([TranscriptLine(call_id=call.id, idx=i, org_id=org_id, client_id=client.id,
+                               t=ln.t, speaker=ln.speaker, text=ln.text) for i, ln in enumerate(lines)])
+    audit.append(db, org_id=org_id, client_id=client.id, actor_user_id=user_id, action="call_added",
+                 entity_type="call", entity_id=str(call.id),
+                 note=f"Added call “{call.title}” ({call_date.isoformat()}, {len(lines)} lines){note_extra}",
+                 after={"sha256": fingerprint, "consent": True, "line_count": len(lines), "source": source})
+    db.commit()
+    return call
+
+
 def create_call(db: Session, access: OrgAccess, client: Client, title: str, call_date: date, transcript: str, consent: bool) -> Call:
     s = get_settings()
     if not consent:
@@ -71,17 +89,22 @@ def create_call(db: Session, access: OrgAccess, client: Client, title: str, call
     lines = parse_transcript(transcript)
     if not lines:
         raise HTTPException(422, "No transcript text found.")
-    fingerprint = hashlib.sha256(json.dumps([ln.as_dict() for ln in lines], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
-    call = Call(org_id=access.org_id, client_id=client.id, title=title.strip(), call_date=call_date, consent=True,
-                sha256=fingerprint, line_count=len(lines), status="new", created_by=access.user.id)
-    db.add(call)
-    db.flush()
-    db.add_all([TranscriptLine(call_id=call.id, idx=i, org_id=access.org_id, client_id=client.id,
-                               t=ln.t, speaker=ln.speaker, text=ln.text) for i, ln in enumerate(lines)])
-    audit.append(db, org_id=access.org_id, client_id=client.id, actor_user_id=access.user.id, action="call_added",
-                 entity_type="call", entity_id=str(call.id),
-                 note=f"Added call “{call.title}” ({call_date.isoformat()}, {len(lines)} lines)",
-                 after={"sha256": fingerprint, "consent": True, "line_count": len(lines)})
+    return insert_call(db, org_id=access.org_id, client=client, user_id=access.user.id, title=title,
+                       call_date=call_date, lines=lines)
+
+
+def set_speakers(db: Session, access: OrgAccess, call: Call, mapping: dict[str, str]) -> Call:
+    """Name the speakers (e.g. "Speaker A" -> "Meera"). The stored transcript is not changed."""
+    raw = {ln.speaker for ln in load_lines(db, call.id, raw=True) if ln.speaker}
+    unknown = set(mapping) - raw
+    if unknown:
+        raise HTTPException(422, f"Not speakers in this transcript: {', '.join(sorted(unknown))}")
+    clean = {k: v.strip()[:80] for k, v in mapping.items() if v and v.strip()}
+    before = dict(call.speaker_map or {})
+    call.speaker_map = clean
+    audit.append(db, org_id=access.org_id, client_id=call.client_id, actor_user_id=access.user.id, action="speakers_named",
+                 entity_type="call", entity_id=str(call.id), note=f"Named the speakers in “{call.title}”",
+                 before=before, after=clean)
     db.commit()
     return call
 
@@ -245,7 +268,8 @@ def brief(db: Session, client: Client) -> dict:
 
     def entry(r: Record, d: date) -> dict:
         return {"id": r.id, "value": r.value or r.text, "text": r.text, "type": r.type, "who": r.who, "call_id": r.call_id,
-                "call_date": d, "t": r.t, "quote": r.quote, "verified": r.verified}
+                "call_date": d, "t": r.t, "quote": r.quote, "verified": r.verified,
+                "client_confirmation": r.client_confirmation, "client_comment": r.client_comment}
 
     terms = []
     for g in groups.values():
@@ -263,6 +287,7 @@ def brief(db: Session, client: Client) -> dict:
         "open_actions": len(actions),
         "overdue_actions": sum(1 for r in actions if r.due_date and r.due_date < today),
         "outside_scope": sum(1 for r, _ in accepted if r.outside_scope and r.status == "current"),
+        "disputed_by_client": sum(1 for r, _ in accepted if r.client_confirmation == "disputed" and r.status == "current"),
     }
 
 
@@ -366,7 +391,8 @@ def ask(db: Session, access: OrgAccess, client: Client, question: str, llm: LLM)
 
 # --- recap -------------------------------------------------------------------------------
 
-def recap(db: Session, access: OrgAccess, call: Call, client: Client, signer: str, agency: str, llm: LLM) -> dict:
+def recap(db: Session, access: OrgAccess, call: Call, client: Client, signer: str, agency: str, llm: LLM,
+          confirm_link: str | None = None) -> dict:
     check_budget(db, access.org_id)
     recs = db.execute(select(Record).where(Record.call_id == call.id).order_by(Record.line_idx)).scalars().all()
     accepted = [r for r in recs if r.reviewed]
@@ -405,7 +431,9 @@ def recap(db: Session, access: OrgAccess, call: Call, client: Client, signer: st
     m = re.match(r"^\s*Subject:\s*(.+)$", textout or "", re.MULTILINE)
     subject = m.group(1).strip() if m else f"Recap of our call: {call.title}"
     body = re.sub(r"^\s*Subject:.*\n?", "", textout or "", count=1, flags=re.MULTILINE).strip()
-    return {"subject": subject, "body": body, "left_out_pending": pending}
+    if confirm_link:
+        body += ("\n\nPlease confirm each item (or tell us what's not right) here, it takes a minute:\n" + confirm_link)
+    return {"subject": subject, "body": body, "left_out_pending": pending, "confirm_link": confirm_link}
 
 
 # --- quality -----------------------------------------------------------------------------
@@ -498,6 +526,27 @@ def export_markdown(db: Session, client: Client) -> str:
         L += [f"- Now: {r.value + '. ' if r.value else ''}{r.text} | AI originally: "
               f"{(r.original.get('value') or '') + '. ' if r.original.get('value') else ''}{r.original.get('text')}" for r in edited]
         L.append("")
+    confirmed = [r for r in recs if r.client_confirmation]
+    if confirmed:
+        L += ["## Client confirmations", ""]
+        for r in confirmed:
+            L.append(f"- {'Confirmed' if r.client_confirmation == 'confirmed' else 'DISPUTED'} by the client "
+                     f"on {r.client_responded_at.astimezone(timezone.utc).strftime('%Y-%m-%d')}: {r.text}"
+                     + (f" Client's comment: “{r.client_comment}”" if r.client_comment else ""))
+        L.append("")
+    from .change_orders import lines_of, money
+    from .models import ChangeOrder
+    cos = db.execute(select(ChangeOrder).where(ChangeOrder.client_id == client.id).order_by(ChangeOrder.number)).scalars().all()
+    if cos:
+        L += ["## Change orders", ""]
+        for co in cos:
+            L.append(f"### #{co.number} {co.title}: {co.status}" + (f" by {co.decided_by_name} on "
+                     f"{co.decided_at.astimezone(timezone.utc).strftime('%Y-%m-%d')}" if co.decided_at else ""))
+            for ln in lines_of(db, co.id):
+                L.append(f"- {ln.description}: {ln.quantity.normalize()} {ln.unit} × {money(ln.unit_price, co.currency)} = {money(ln.amount, co.currency)}")
+            L.append(f"- Subtotal {money(co.subtotal, co.currency)}, tax {co.tax_percent}% {money(co.tax, co.currency)}, "
+                     f"**total {money(co.total, co.currency)}**")
+            L.append("")
     L += ["## Activity log (newest first, hash-chained)", ""]
     for e in events:
         L.append(f"- {e.at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC: "
@@ -505,7 +554,11 @@ def export_markdown(db: Session, client: Client) -> str:
     L += ["", "## Transcripts", ""]
     for c in calls:
         L += [f"### {c.title}, {c.call_date.isoformat()}", "", f"SHA-256 fingerprint: {c.sha256}",
-              f"Recording consent confirmed when added: {'yes' if c.consent else 'no'}", ""]
+              f"Recording consent confirmed when added: {'yes' if c.consent else 'no'}",
+              "Source: " + ("transcribed from an audio recording" if c.source == "audio" else "transcript")]
+        if c.speaker_map:
+            L.append("Speaker names added by the agency: " + ", ".join(f"{k} = {v}" for k, v in c.speaker_map.items()))
+        L.append("")
         for i, ln in enumerate(load_lines(db, c.id)):
             L.append(f"L{i} " + (f"[{ln.t}] " if ln.t else "") + (f"{ln.speaker}: " if ln.speaker else "") + ln.text + "  ")
         L.append("")

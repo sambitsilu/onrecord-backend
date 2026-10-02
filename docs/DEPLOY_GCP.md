@@ -38,6 +38,7 @@ printf %s 'postgresql+psycopg://onrecord_owner:OWNER-PASSWORD@/onrecord?host=/cl
 printf %s 'postgresql+psycopg://onrecord_app:APP-PASSWORD@/onrecord?host=/cloudsql/PROJECT:asia-south1:onrecord-db' \
   | gcloud secrets create db-app-url --data-file=-
 printf %s 'YOUR-ANTHROPIC-API-KEY' | gcloud secrets create anthropic-api-key --data-file=-
+printf %s 'YOUR-ASSEMBLYAI-API-KEY' | gcloud secrets create assemblyai-api-key --data-file=-
 ```
 
 ## 4. Build the image and run migrations
@@ -63,6 +64,8 @@ gcloud run jobs execute onrecord-migrate --region=asia-south1 --wait
 
 ## 5. Limited database user for the app
 
+After every release that adds migrations, re-run the GRANT lines of `sql/app_role.sql`.
+
 Open **Cloud SQL Studio** for `onrecord-db` (or `gcloud sql connect onrecord-db --user=onrecord_owner --database=onrecord`),
 change the password in `sql/app_role.sql` to match `APP-PASSWORD` from step 3, and run the file.
 This user can't alter tables or switch off the activity-log protection.
@@ -80,8 +83,8 @@ gcloud run deploy onrecord-api --region=asia-south1 \
   --image=asia-south1-docker.pkg.dev/PROJECT/onrecord/api:v1 \
   --service-account=onrecord-api@PROJECT.iam.gserviceaccount.com \
   --add-cloudsql-instances=PROJECT:asia-south1:onrecord-db \
-  --set-secrets=DATABASE_URL=db-app-url:latest,ANTHROPIC_API_KEY=anthropic-api-key:latest \
-  --set-env-vars=ENV=production,AUTH_MODE=firebase,FIREBASE_PROJECT_ID=PROJECT,LLM_MODEL=claude-sonnet-5-5,ALLOWED_ORIGINS=https://app.YOURDOMAIN \
+  --set-secrets=DATABASE_URL=db-app-url:latest,ANTHROPIC_API_KEY=anthropic-api-key:latest,ASSEMBLYAI_API_KEY=assemblyai-api-key:latest \
+  --set-env-vars=ENV=production,AUTH_MODE=firebase,FIREBASE_PROJECT_ID=PROJECT,LLM_MODEL=claude-sonnet-5-5,ALLOWED_ORIGINS=https://app.YOURDOMAIN,PUBLIC_BASE_URL=https://api.YOURDOMAIN,TRANSCRIPTION_PROVIDER=assemblyai \
   --no-cpu-throttling --timeout=900 --min-instances=0 --max-instances=3 \
   --allow-unauthenticated
 ```

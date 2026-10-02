@@ -9,3 +9,4 @@ email-validator==2.3.0
 anthropic==1.11.0
 google-auth==2.59.1
 requests==2.33.1
+python-multipart==0.0.20

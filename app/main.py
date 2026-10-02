@@ -15,13 +15,15 @@ from .config import get_settings
 from .db import SessionLocal
 from .jobs import fail_stale_runs
 from .llm import LLM, AnthropicLLM
-from .routers import clients, orgs
+from .routers import clients, extras, orgs, public
+from .transcription import Transcriber, default_transcriber
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("onrecord")
 
 
-def create_app(llm_factory: Callable[[], LLM] | None = None) -> FastAPI:
+def create_app(llm_factory: Callable[[], LLM] | None = None,
+               transcriber_factory: Callable[[], Transcriber | None] | None = None) -> FastAPI:
     settings = get_settings()
     settings.check_production_safety()
 
@@ -42,6 +44,7 @@ def create_app(llm_factory: Callable[[], LLM] | None = None) -> FastAPI:
                   redoc_url=None, openapi_url=None if settings.env == "production" else "/openapi.json")
     app.state.llm_factory = llm_factory or (lambda: AnthropicLLM())
     app.state.llm_model = settings.llm_model
+    app.state.transcriber_factory = transcriber_factory or default_transcriber
 
     if settings.origins:
         app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=False,
@@ -90,6 +93,8 @@ def create_app(llm_factory: Callable[[], LLM] | None = None) -> FastAPI:
 
     app.include_router(orgs.router)
     app.include_router(clients.router)
+    app.include_router(extras.router)
+    app.include_router(public.router)
     return app
 
 
