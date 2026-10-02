@@ -1,33 +1,100 @@
-# Onrecord backend
+# Onrecord
 
-The server for Onrecord: a record of what each client agreed to, built from call
-transcripts, reviewed by people, and backed by evidence that can't be quietly changed.
+[![tests](https://github.com/sambitsilu/onrecord-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/sambitsilu/onrecord-backend/actions/workflows/ci.yml)
 
-Python (FastAPI) + PostgreSQL. Designed for Google Cloud Run + Cloud SQL, but runs
-anywhere Docker runs. **Nothing in this folder deploys anything by itself.**
+**A reviewed, evidence-backed record of what every client agreed to.**
 
-## What it does
+> "We never agreed to that."
 
-- **Teams.** Agencies are organizations with owners and members; invitations by email.
-  Sign-in with Google Identity Platform (Firebase). Every query is scoped to the
-  organization; tests prove one agency can't reach another's data.
-- **Reading calls.** Paste or upload a transcript (Meet, Zoom, Teams, VTT, SRT, plain
-  notes). The AI finds approvals, decisions, action items, change requests and open
-  questions. Long calls are read in parts. Runs in the background; failures are recorded.
-- **Checks done in code, not by the AI.** Each quote must be found in the transcript,
-  numbers must have been said, approvals must come from someone on the client's side.
-  Failing records are flagged and can't be bulk-accepted.
-- **Review.** Accept, edit (the AI's original wording is kept), discard, mark replaced,
-  restore, delete, or add something the AI missed. Re-reading a call never touches
-  reviewed records.
-- **Brief.** The current value of every agreed topic, with its history of changes.
-- **Ask, recap emails, quality stats, export (dispute pack).**
-- **Evidence protection in the database itself.** Transcripts can't be edited; a call's
-  fingerprint, date and consent can't be changed; the activity log is append-only *and*
-  hash-chained, so tampering is detectable even by someone with database-owner rights.
-  Deleting a client erases its content while the log stays verifiable.
-- **Cost control.** A monthly AI token budget per organization (failed attempts count).
-- **AI test suite** (`eval/`): 8 made-up calls with known right answers.
+Every agency has heard it. Decisions get made on calls, the client changes their mind two
+weeks later, someone remembers it differently, and the extra work quietly gets done for free.
+Meeting note-takers summarize each call, but none of them answer the questions that actually
+cost agencies money: *What is agreed right now? What changed, and when? Was that request in scope?*
+
+Onrecord turns call transcripts into a **living project brief** that answers those questions,
+with every line traceable to the exact moment it was said.
+
+**Live demo:** [try the prototype with a sample client](https://claude.ai/artifact/TNfd5YC9yAnMBdyC8CbGxH)
+(click "Try it with a sample client", no sign-up)
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Call transcript<br/>Meet · Zoom · Teams · notes] --> B[AI reads the call]
+    B --> C{Checks done in code}
+    C -->|quote found, numbers said,<br/>client approved it| D[Review queue]
+    C -->|a check failed| E[Flagged:<br/>must be checked one by one]
+    E --> D
+    D -->|a person accepts| F[Living brief<br/>current value + history]
+    F --> G[Recap email<br/>for the client to confirm]
+    F --> H[Scope-creep flags]
+    F --> I[Dispute pack export]
+```
+
+1. **Add a call.** Paste or upload the transcript. Recording consent is confirmed and stored.
+2. **The AI finds what matters:** approvals, decisions, action items, change requests and open questions,
+   each with the speaker, an exact quote and a timestamp. Relative dates ("by Wednesday") become real dates.
+3. **Software checks the AI's work.** The quote must actually be in the transcript, numbers must have been
+   said, and an "approval" must come from someone on the client's side. Anything that fails is flagged.
+4. **A person reviews.** Nothing reaches the record without being accepted. Flagged findings can't be bulk-accepted.
+5. **The brief updates itself.** "Launch date: **27 October** (changed from 20 October on 26 Sep)."
+6. **Use the record:** draft a recap email the client confirms in writing, catch requests outside the
+   signed scope before doing free work, ask questions across months of calls, or export a dispute pack.
+
+## Product decisions worth noting
+
+**The transcript is the evidence; the AI is only an index to it.** AI makes mistakes, and in a product
+used to settle disagreements, one wrong record destroys trust. So every AI claim is checked against the
+transcript in code, every record links to the exact line it came from, and a person approves everything.
+
+**Built for "who agreed to what," not "what was discussed."** The core object is the *agreement*, with
+a history of changes, rather than per-meeting notes. That's the gap note-takers leave open.
+
+**History that can't be quietly rewritten.** Transcripts can't be edited; the activity log is append-only,
+enforced by the database, and hash-chained, so even someone with database-owner rights can't alter it
+without detection. Deleting a client erases its content while the log stays verifiable.
+
+**Accuracy is measured, not assumed.** An evaluation suite of test calls with known right answers covers
+hedging ("maybe, not yet" is not an approval), clients changing their minds mid-call, changes to earlier
+agreements, scope creep, Hinglish, hidden instructions inside a transcript, and who actually agreed.
+The model is pinned and only changed after re-running the suite.
+
+**Made for Indian agencies too.** Hinglish calls are part of the test suite, transcripts in Indian
+scripts are parsed correctly, and the deployment plan keeps client data in India (Mumbai region).
+
+## What's in this repository
+
+The production backend: Python (FastAPI) + PostgreSQL, designed for Google Cloud Run and Cloud SQL.
+
+| | |
+|---|---|
+| Teams and access | Agencies with owners and members; Google sign-in; tested isolation between agencies |
+| AI pipeline | Claude via the Anthropic API, structured output, long calls read in parts, failures recorded |
+| Review and brief | Accept, edit (AI's original kept), discard, add what the AI missed, merge topics |
+| Evidence protection | Database triggers, hash-chained audit log, limited database role, erasure that keeps the log valid |
+| Quality and cost | Discard/edit/miss rates per client; monthly AI budget per agency |
+| Tests | 28 automated tests against a real PostgreSQL, run on every push (badge above) |
+
+## Status
+
+A working prototype (the live demo) and a tested backend. Not yet deployed or used with real clients.
+Next: run the accuracy suite with real model calls, connect the web app to this backend, add audio
+upload with transcription for phone calls, and pilot it on my own agency's client calls.
+
+## How it was built
+
+I run a small web agency, and this started from a problem I see in client work. I defined the product,
+made the product and architecture decisions, set the quality bar, and directed and tested the build.
+Much of the code was written with Claude (Anthropic) as an AI pair-programmer. The idea was inspired by
+*Vox*, a meeting-memory project from a lablab.ai hackathon; Onrecord is an independent implementation
+focused on client agreements.
+
+---
+
+# Technical guide
 
 ## Run it on your computer (no cloud needed)
 
