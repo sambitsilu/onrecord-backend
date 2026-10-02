@@ -1,0 +1,23 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: onrecord
+          POSTGRES_PASSWORD: onrecord
+          POSTGRES_DB: onrecord_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U onrecord" --health-interval 2s --health-retries 30
+    env:
+      DATABASE_URL: postgresql+psycopg://onrecord:onrecord@localhost:5432/onrecord_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -q
